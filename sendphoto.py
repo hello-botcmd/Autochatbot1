@@ -84,8 +84,9 @@ def parse_post_link(link: str):
 
 async def verify_and_save_post(user_client: Client, owner_id: str, link: str):
     """
-    Verify a channel post via the account's userbot and save it as that
-    account's paid photo. Returns (ok: bool, message_for_user: str).
+    Check the account can access the linked post (any type: photo, video,
+    album item, voice, text — anything) and save it as that account's paid
+    post. Returns (ok: bool, message_for_user: str).
     """
     parsed = parse_post_link(link)
     if not parsed:
@@ -109,12 +110,6 @@ async def verify_and_save_post(user_client: Client, owner_id: str, link: str):
     if not msg or msg.empty:
         return False, "❌ **Post not found** — double-check the link."
 
-    if not msg.photo:
-        return False, (
-            "❌ **That post has no photo.**\n\n"
-            "Link the post that contains your photo (with stars)."
-        )
-
     chat_title = msg.chat.title or msg.chat.username or str(msg.chat.id)
     protected = bool(
         getattr(msg, "has_protected_content", False)
@@ -132,12 +127,12 @@ async def verify_and_save_post(user_client: Client, owner_id: str, link: str):
     save_data(data)
 
     warn = (
-        "\n\n⚠️ This channel **restricts forwarding** — I'll try to copy the photo instead."
+        "\n\n⚠️ This channel **restricts forwarding** — I'll try to copy the post instead."
         if protected else ""
     )
     triggers = ", ".join(f"`{w}`" for w in sorted(TRIGGER_WORDS))
     return True, (
-        f"✅ **Paid photo set for this account!**\n\n"
+        f"✅ **Paid post saved for this account!**\n\n"
         f"• **Channel:** `{chat_title}`\n"
         f"• **Post:** `#{message_id}`\n\n"
         f"Now when someone DMs this account a message containing {triggers}, "
@@ -193,7 +188,7 @@ def register_sendphoto_handler(user_client: Client, owner_id: str):
         except Exception as e:
             print(f"[sendphoto] forward failed, trying copy: {e}")
 
-        # Fallback: forward-restricted channels -> copy the photo
+        # Fallback: forward-restricted channels -> copy the post
         try:
             src = await client.get_messages(
                 photo_cfg["chat_id"], photo_cfg["message_id"]
