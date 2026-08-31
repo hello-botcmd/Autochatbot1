@@ -6,7 +6,11 @@ from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from aichat import load_data, register_ai_handler, save_data
-from sendphoto import register_sendphoto_handler
+from sendphoto import (
+    TRIGGER_WORDS,
+    register_sendphoto_handler,
+    verify_and_save_post,
+)
 from stats import get_stats_text
 
 load_dotenv()
@@ -106,16 +110,66 @@ async def callback_handler(client, query: CallbackQuery):
         )
 
     elif query.data == "set_photo_menu":
-        text = (
-            "💎 **Paid Photo Channel Settings**\n\n"
-            "Current Default Channel: `@solivoraa`\n"
-            "Active Trigger Commands: `.send`, `send`, `.star`\n\n"
-            "When triggered in private DMs, connected userbots will automatically copy and reply with a photo from the configured channel."
-        )
+        saved_users = data.get("users", {})
+        btns = []
+        for uid in connected_clients:
+            uinfo = saved_users.get(uid, {})
+            name = uinfo.get("name", f"User {uid}")
+            cfg = uinfo.get("paid_photo")
+            marker = "💎" if cfg else "➕"
+            label = f"{marker} {name}" + (f" — {cfg.get('chat_title')}" if cfg else "")
+            btns.append([InlineKeyboardButton(label, callback_data=f"setphoto_acc_{uid}")])
+
+        if btns:
+            triggers = ", ".join(f"`{w}`" for w in sorted(TRIGGER_WORDS))
+            text = (
+                "💎 **Paid Photo Module**\n\n"
+                "Select an account to configure its paid photo:\n\n"
+                "➕ no photo set · 💎 photo configured\n\n"
+                f"When someone DMs the account a message containing {triggers} "
+                "(alone or inside a sentence), the channel post is forwarded "
+                "and AI stays silent for that message."
+            )
+        else:
+            text = (
+                "💎 **Paid Photo Module**\n\n"
+                "No accounts are connected right now. Add an account first."
+            )
+
+        btns.append([InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="back_main")])
+        await query.answer()
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(btns))
+
+    elif query.data.startswith("setphoto_acc_"):
+        target_uid = query.data.replace("setphoto_acc_", "")
+        if target_uid not in connected_clients:
+            await query.answer("That account is offline — reconnect it first!", show_alert=True)
+            return
+
+        cfg = data.get("users", {}).get(target_uid, {}).get("paid_photo")
+        if cfg:
+            current = (
+                f"📸 **Current post:** `{cfg.get('chat_title')}` · "
+                f"[post #{cfg.get('message_id')}]({cfg.get('link')})\n\n"
+                "Sending a new link will replace it."
+            )
+        else:
+            current = "📸 **Current post:** none"
+
+        user_states[user_id] = f"AWAITING_PHOTO_LINK:{target_uid}"
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="back_main")]
+            [InlineKeyboardButton("⬅️ Cancel", callback_data="set_photo_menu")]
         ])
-        await query.message.edit_text(text, reply_markup=markup)
+        await query.answer()
+        await query.message.edit_text(
+            "💎 **Set Paid Photo**\n\n"
+            f"{current}\n\n"
+            "🔗 Send the **link of the channel post** (your photo with stars).\n\n"
+            "• The account must be **admin** in that channel\n"
+            "• Link format: `https://t.me/yourchannel/12`",
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
 
     elif query.data == "manage_acc":
         saved_users = data.get("users", {})
@@ -146,6 +200,8 @@ async def callback_handler(client, query: CallbackQuery):
         ai_status = "ON ✅" if uinfo.get("ai_enabled", True) else "OFF ❌"
         conn_status = "Connected 🟢" if is_connected else "Offline 🔴"
         acc_name = uinfo.get("name", "Unknown User")
+        photo_cfg = uinfo.get("paid_photo")
+        photo_status = f"✅ {photo_cfg.get('chat_title')} #{photo_cfg.get('message_id')}" if photo_cfg else "❌ Not set"
 
         text = (
             f"👤 **Account Management**\n"
@@ -154,6 +210,7 @@ async def callback_handler(client, query: CallbackQuery):
             f"• **User ID:** `{target_uid}`\n"
             f"• **Session Status:** {conn_status}\n"
             f"• **AI Auto-Reply:** {ai_status}\n"
+            f"• **Paid Photo:** {photo_status}\n"
             f"━━━━━━━━━━━━━━━━━━━━"
         )
 
@@ -221,7 +278,38 @@ async def user_input_handler(client, message: Message):
     user_id = str(message.from_user.id)
     state = user_states.get(user_id)
 
+    if state and state.startswith("AWAITING_PHOTO_LINK:"):
+        target_uid = state.split(":", 1)[1]
+        status_msg = await message.reply_text("🔄 Verifying channel post...")
+
+        if message.text is None:
+            await status_msg.edit_text("❌ Please send the post **link as text**.")
+            return
+
+        target_client = connected_clients.get(target_uid)
+        if not target_client:
+            user_states.pop(user_id, None)
+            await status_msg.edit_text(
+                "❌ That account went offline. Reconnect it and try again."
+            )
+            return
+
+        ok, result = await verify_and_save_post(target_client, target_uid, message.text)
+        if ok:
+            user_states.pop(user_id, None)
+
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 Paid Photo Menu", callback_data="set_photo_menu")],
+            [InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="back_main")],
+        ])
+        await status_msg.edit_text(result, reply_markup=markup, disable_web_page_preview=True)
+        return
+
     if state == "AWAITING_SESSION":
+        if message.text is None:
+            await message.reply_text("❌ Please paste the string session as text.")
+            return
+
         session_string = message.text.strip()
         status_msg = await message.reply_text("🔄 Validating & connecting string session...")
 
@@ -264,7 +352,7 @@ async def user_input_handler(client, message: Message):
                 f"✅ **Session Successfully Connected!**\n\n"
                 f"• **Account Name:** `{acc_name}`\n"
                 f"• **User ID:** `{acc_uid}`\n"
-                f"• **Auto Photo Trigger:** Active (`.send`, `send`)",
+                f"• **Auto Photo Trigger:** Configure via 💎 Paid Photo Menu (`send`, `star`)",
                 reply_markup=markup
             )
 
