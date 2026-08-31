@@ -138,7 +138,7 @@ def register_ai_handler(user_client: Client, owner_id: str, api_key: str):
         key_status = "Set ✅" if api_key else "Missing ❌"
         blocked_count = len(data.get("blocked", []))
         persona = data.get("persona", DEFAULT_PERSONA)
-        
+
         cmd_help = (
             "🤖 **AI Chat Control Panel**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -256,6 +256,15 @@ def register_ai_handler(user_client: Client, owner_id: str, api_key: str):
             return
 
         if not message.from_user or not message.text:
+            return
+
+        # Paid-photo trigger takes priority: sendphoto.py forwards the
+        # channel post for this message, so AI must stay silent.
+        # (Lazy import avoids a circular import — sendphoto imports the
+        # storage helpers from this module.)
+        from sendphoto import is_photo_trigger
+
+        if user_config.get("paid_photo") and is_photo_trigger(message.text):
             return
 
         user_id = str(message.from_user.id)
