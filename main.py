@@ -108,7 +108,7 @@ async def callback_handler(client, query: CallbackQuery):
     elif query.data == "set_photo_menu":
         text = (
             "💎 **Paid Photo Channel Settings**\n\n"
-            "Current Default Channel: `@krishbharti`\n"
+            "Current Default Channel: `@solivoraa`\n"
             "Active Trigger Commands: `.send`, `send`, `.star`\n\n"
             "When triggered in private DMs, connected userbots will automatically copy and reply with a photo from the configured channel."
         )
